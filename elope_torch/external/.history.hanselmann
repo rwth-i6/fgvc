@@ -1,0 +1,15 @@
+2020-03-02.20-59-00 wget https://raw.githubusercontent.com/facebookarchive/fb.resnet.torch/master/LICENSE
+2020-03-02.21-02-57 wget https://raw.githubusercontent.com/facebookarchive/fb.resnet.torch/master/models/init.lua
+2020-03-02.21-02-58 wget https://raw.githubusercontent.com/facebookarchive/fb.resnet.torch/master/models/init.lua
+2020-03-03.07-27-16 vi transforms.lua 
+2020-03-03.08-01-46 vi preprocess.lua
+2020-03-03.08-02-06 vi init.lua 
+2020-03-03.08-03-13 vi preprocess.lua 
+2020-03-03.08-55-02 vi init.lua 
+2020-03-03.08-55-18 vi preprocess.lua 
+2020-03-03.09-11-09 vi preprocess.lua 
+2020-03-03.09-50-36 vi preprocess.lua 
+2020-03-03.18-00-32 vi checkpoints.lua 
+2020-03-03.18-00-50 vi init.lua 
+2020-03-03.18-01-13 vi transforms.lua 
+2020-03-03.18-01-33 vi preprocess.lua 
