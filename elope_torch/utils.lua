@@ -65,5 +65,32 @@ function utils.minmaxnorm(input)
     return input
 end
 
+function utils.read_lines(file_name,flags)
+    local lines = {}
+    for line in io.lines(file_name) do
+        lines[#lines + 1] = line
+    end
+
+    return lines
+end
+
+function utils.is_file(file_name)
+    local file = io.open(file_name, "r")
+    if file ~= nil then
+        io.close(file)
+        return true
+    else
+        return false
+    end
+end
+
+function utils.string_split(string,words)
+    local words = {}
+    for word in string.gmatch(string,"%S+") do
+        words[#words + 1] = word
+    end
+    return words
+end
+
 return utils
 

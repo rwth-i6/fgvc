@@ -29,7 +29,7 @@ function M.getPreprocessTransformerTestLoc(scale_size)
    }
 end
 
-function M.getPreprocessTransformer(scale_size,crop_size,jitter_b,jitter_c,jitter_s,lighting,gray)
+function M.getPreprocessTransformer(scale_size,crop_size,jitter_b,jitter_c,jitter_s,lighting)
    return t.Compose{
          t.ScaleSquare(scale_size),
          t.ColorJitter({

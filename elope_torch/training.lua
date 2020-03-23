@@ -43,7 +43,7 @@ function center_update(centers, alpha, data, labels)
     for k, indices_k in pairs(indices_by_class) do
         local data_c = data:index(1, torch.LongTensor(indices_k))
         local N = data_c:size(1)
-        delta_c[k]:copy(centers[k]:repeatTensor(N, 1):add(-data_c):sum(1))
+        delta_c[k]:copy(centers[k]:repeatTensor(N, 1):add(-data_c):sum(1) / (N + 1))
     end
     centers:add(-alpha * delta_c)
 
@@ -86,9 +86,20 @@ function training(dataset, opt, model, criterion, optim_state, epoch)
         inputs_char:copy(dataset.data:index(1,batch))
 
         for i=1, inputs_char:size(1) do 
-            local img_path = ffi.string(inputs_char[i]:data())
-            local img = image.load(path.join(dataset.image_path,img_path), 3)
+            local img_name = ffi.string(inputs_char[i]:data())
+            local img = image.load(path.join(dataset.image_path,img_name), 3)
             img_size = img:size()
+
+            if model.localization_module ~= nil then
+                local img_loc = prepTLoc(img)
+                local loc_output = model.localization_module:forward(img_loc:cuda():view(1,img_loc:size(1),img_loc:size(2),img_loc:size(3)))
+                local bb_estimate = utils.get_bb(loc_output[1]:view(14,14),img_size,scale_size,opt.tau)
+                local x1 = math.max(1,bb_estimate[1])
+                local y1 = math.max(1,bb_estimate[2])
+                local x2 = math.min(img:size(3),bb_estimate[1]+bb_estimate[3])
+                local y2 = math.min(img:size(2),bb_estimate[2]+bb_estimate[4])
+                img = image.crop(img, x1, y1, x2, y2)
+            end
 
             if opt.rotation_aug_p > 0 then
                 img = rotation_augmentation(img, opt.rotation_aug_p, opt.rotation_aug_deg)
@@ -215,9 +226,19 @@ function testing(dataset, model, criterion, opt)
         inputs_char:resize(B,128) --TODO
         inputs_char:copy(dataset.data:index(1,batch))
         for i=1, inputs_char:size(1) do
-            local img_path = ffi.string(inputs_char[i]:data())
-            local img = image.load(path.join(dataset.image_path,img_path),3)
+            local img_name = ffi.string(inputs_char[i]:data())
+            local img = image.load(path.join(dataset.image_path,img_name),3)
             local img_size = img:size()
+            if model.localization_module ~= nil then
+                local img_loc = prepTLoc(img)
+                local loc_output = model.localization_module:forward(img_loc:cuda():view(1,img_loc:size(1),img_loc:size(2),img_loc:size(3))):float()
+                local bb_estimate = utils.get_bb(loc_output[1]:view(14,14),img_size,scale_size,opt.tau)
+                local x1 = math.max(1,bb_estimate[1])
+                local y1 = math.max(1,bb_estimate[2])
+                local x2 = math.min(img:size(3),bb_estimate[1]+bb_estimate[3])
+                local y2 = math.min(img:size(2),bb_estimate[2]+bb_estimate[4])
+                img = image.crop(img, x1, y1, x2, y2)
+            end
 
             img = prepT(img)
 
@@ -231,7 +252,7 @@ function testing(dataset, model, criterion, opt)
         total_loss = total_loss + criterion.softmax:forward(output, labels)
         local _, preds = torch.sort(output, output:size():size(), true)
         local predsk = preds:narrow(2,1,1):float()
-        local predskmax,_ = predsk:eq(labels:float():expandAs(predsk)):max(2)
+        local predskmax,_ = predsk:eq(labels:float():view(labels:size(1),1):expandAs(predsk)):max(2)
         local local_correct = predskmax:sum()
         total_correct = total_correct + local_correct
 

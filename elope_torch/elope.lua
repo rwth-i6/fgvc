@@ -8,14 +8,14 @@ require 'InterClassLoss'
 require 'KMaxPooling'
 require 'training'
 local lapp = require 'pl.lapp'
+local utils = require 'utils'
 local checkpoint = require 'external/checkpoints'
 local modelInit = require 'external/init'
 local opt = lapp [[
 --save_path             (default '') 
 --epochs                (default 90)
---saveEpoch             (default 1)
+--save_epoch            (default 30)
 --num_classes           (default 200)
---hflip                 (default true)
 --lambda                (default 2.0)
 --num_samples           (default 256)
 --margin                (default 0.75)
@@ -29,22 +29,26 @@ local opt = lapp [[
 --weight_decay          (default 0.001)
 --momentum              (default 0.9)
 --name                  (default '')
---backbone              (default '/work/cv3/hanselmann/finegrained/checkpoints/resnet50_retrained_best.t7')
+--backbone              (default '')
 --centers               (default '')
 --finetune              (default '')
 --softmax               (default 1)
 --intra                 (default 1)
 --inter                 (default 1)
 --tau                   (default 0.3)
---rotation_aug_p        (default 1)
---rotation_aug_deg      (default 20)
 --scale_size            (default 448)
 --crop_size             (default 448)
 --lastLayerSize         (default 512)
 --F                     (default 512)
 --K                     (default 4)
 --image_path            (default '')
+--dataset_path          (default '')
+--dataset_name          (default '')
+--num_threads           (default 4)
 --mode                  (default 'train')
+--hflip                 (default true)
+--rotation_aug_p        (default 1)
+--rotation_aug_deg      (default 20)
 --jitter_b              (default 0.4)
 --jitter_c              (default 0.4)
 --jitter_s              (default 0.4)
@@ -59,20 +63,20 @@ if opt.seed > 0 then
     cutorch.manualSeed(opt.seed)
     math.randomseed(opt.seed)
 end
+torch.setnumthreads(opt.num_threads)
 
-torch.setnumthreads(4)
-
-local train_dataset, test_dataset, root_folder
-local root_folder = ''
-train_dataset = torch.load(root_folder .. '_train.t7')
+local train_dataset, test_dataset, val_dataset
+train_dataset = torch.load(path.join(opt.dataset_path, opt.dataset_name .. '_train.t7'))
 train_dataset.image_path = opt.image_path
 train_dataset.name = 'train'
-val_dataset = torch.load(root_folder .. '_val.t7')
-val_dataset.image_path = opt.image_path
-val_dataset.name = 'val'
-test_dataset = torch.load(root_folder .. '_test.t7')
+test_dataset = torch.load(path.join(opt.dataset_path, opt.dataset_name .. '_test.t7'))
 test_dataset.image_path = opt.image_path
 test_dataset.name = 'test'
+if utils.is_file(path.join(opt.dataset_path, opt.dataset_name .. '_val.t7')) then
+    val_dataset = torch.load(path.join(opt.dataset_path, opt.dataset_name .. '_val.t7'))
+    val_dataset.image_path = opt.image_path
+    val_dataset.name = 'val'
+end
 
 local model = {}
 local criterion = {}
@@ -134,6 +138,7 @@ model.centers = model.centers:cdiv(model.centers:norm(2,2):expandAs(model.center
 if opt.localization_module ~= '' then
     model.localization_module = torch.load(opt.localization_module)
     model.localization_module:cuda()
+    model.localization_module:evaluate()
 end
 
 criterion.softmax = nil
@@ -177,60 +182,64 @@ print('Network has', model.params:numel(), 'parameters')
 print('Network has', #model.network:findModules'cudnn.SpatialConvolution', 'convolutions')
 
 modelFilePrefix = opt.name  
+modelFilePrefix = modelFilePrefix .. '_s'..  opt.seed
 modelFilePrefix = modelFilePrefix .. '_is' .. opt.scale_size
 modelFilePrefix = modelFilePrefix .. '_lls' .. opt.lastLayerSize
-modelFilePrefix = modelFilePrefix .. '_seed'..  opt.seed
 modelFilePrefix = modelFilePrefix .. '_lr' .. opt.learning_rate
 modelFilePrefix = modelFilePrefix .. '_bs' .. opt.batch_size
 modelFilePrefix = modelFilePrefix .. '_es' .. opt.epoch_step
-modelFilePrefix = modelFilePrefix .. '_aug' .. opt.rotation_aug_p .. '-' .. opt.rotation_aug_deg
-modelFilePrefix = modelFilePrefix .. '_augJit' .. opt.jitter_b .. '-' .. opt.jitter_c .. '-' .. opt.jitter_s
-modelFilePrefix = modelFilePrefix .. '_augLight' .. opt.lighting
-modelFilePrefix = modelFilePrefix .. '_gamma' .. opt.gamma
-modelFilePrefix = modelFilePrefix .. '_lambda' .. opt.lambda
-modelFilePrefix = modelFilePrefix .. '_alpha' .. opt.alpha
-modelFilePrefix = modelFilePrefix .. '_margin' .. opt.margin
+modelFilePrefix = modelFilePrefix .. '_aug' .. opt.rotation_aug_p .. '-' .. opt.rotation_aug_deg .. '-' .. opt.jitter_b .. '-' .. opt.jitter_c .. '-' .. opt.jitter_s .. '-' .. opt.lighting
+modelFilePrefix = modelFilePrefix .. '_g' .. opt.gamma
+modelFilePrefix = modelFilePrefix .. '_l' .. opt.lambda
+modelFilePrefix = modelFilePrefix .. '_a' .. opt.alpha
+modelFilePrefix = modelFilePrefix .. '_m' .. opt.margin
 
 
 if opt.mode == 'test' then
     if (val_dataset ~= nil) then
         local val_mean_loss, val_accuracy = testing(val_dataset, model, criterion, opt)
-        print('VAL:   Accuracy epoch ' .. epoch .. ' = ' .. val_accuracy .. '%')
-        print('VAL:  Mean loss epoch ' .. epoch .. ' = ' .. val_mean_loss .. '%')
+        print('VAL:   Accuracy epoch = ' .. val_accuracy .. '%')
+        print('VAL:  Mean loss epoch = ' .. val_mean_loss .. '%')
     end
 
     if (test_dataset ~= nil) then
         local test_mean_loss, test_accuracy = testing(test_dataset, model, criterion, opt)
-        print('TEST:  Accuracy epoch ' .. epoch .. ' = ' .. test_accuracy .. '%')
-        print('TEST: Mean loss epoch ' .. epoch .. ' = ' .. test_mean_loss .. '%')
+        print('TEST:  Accuracy epoch = ' .. test_accuracy .. '%')
+        print('TEST: Mean loss epoch = ' .. test_mean_loss .. '%')
     end
 end
 
 
 local epoch = 1
+local best_val_accuracy = 0
 while (opt.epochs == -1 or opt.epochs >= epoch) and (opt.mode == 'train') do
     print('TRAIN: Epoch ' .. epoch)
     mean_loss, total_time, model, optim_state = training(train_dataset, opt, model, criterion, optim_state, epoch)
     print('TRAIN: Total time = ' .. total_time .. ' hours')
-    print('TRAIN: Mean loss = ' .. mean_loss)
+    print('TRAIN:  Mean loss = ' .. mean_loss)
    
+    local val_mean_loss = 0
+    local val_accuracy = 0
+    local test_mean_loss = 0 
+    local test_accuracy = 0
+
     if (val_dataset ~= nil) then
-        local val_mean_loss, val_accuracy = testing(val_dataset, model, criterion, opt)
+        val_mean_loss, val_accuracy = testing(val_dataset, model, criterion, opt)
         print('VAL:   Accuracy epoch ' .. epoch .. ' = ' .. val_accuracy .. '%')
         print('VAL:  Mean loss epoch ' .. epoch .. ' = ' .. val_mean_loss .. '%')
     end
 
     if (test_dataset ~= nil) then
-        local test_mean_loss, test_accuracy = testing(test_dataset, model, criterion, opt)
+        test_mean_loss, test_accuracy = testing(test_dataset, model, criterion, opt)
         print('TEST:  Accuracy epoch ' .. epoch .. ' = ' .. test_accuracy .. '%')
         print('TEST: Mean loss epoch ' .. epoch .. ' = ' .. test_mean_loss .. '%')
     end
 
-    if (epoch % opt.saveEpoch == 0 or epoch == 1) then
+    if (epoch % opt.save_epoch == 0) then
         checkpoint.save(epoch, model.network, model.fc, model.optim_state, torch.getRNGState(), cutorch.getRNGState(), model.centers, modelFilePrefix, opt)
     end 
 
-    if (val_accuracy > best_val_accuracy) then
+    if (val_accuracy >= best_val_accuracy) then
         checkpoint.save('best', model.network, model.fc, optim_state, torch.getRNGState(), cutorch.getRNGState(), model.centers, modelFilePrefix, opt)
         best_val_accuracy = val_accuracy
     end
