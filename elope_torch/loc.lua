@@ -9,36 +9,35 @@ local lapp = require 'pl.lapp'
 local utils = require 'utils'
 local optnet =  require 'optnet'
 local checkpoint = require 'external/checkpoints'
-local modelInit = require 'external/init'
+local setupModel = require 'setupModel'
 local opt = lapp [[
---save_path            (default '') 
---backbone             (default '')
---epochs               (default 45)
---save_epoch           (default 15)
---num_classes          (default 200)
---hflip                (default true)
---seed                 (default 1)
---batch_size           (default 16)
---epoch_step           (default 15)
---learning_rate_decay  (default 0.1)
---learning_rate        (default 0.1)
---weight_decay         (default 0.001)
---momentum             (default 0.9)
---name                 (default '')
---rotation_aug_p       (default 1)
---rotation_aug_deg     (default 30)
---scale_size           (default 448)
---crop_size            (default 448)
---loc_w                (default 14)
---loc_h                (default 14)
---image_path           (default '')
---dataset_path         (default '')
---dataset_name         (default '')
---num_threads          (default 4)
---jitter_b             (default 0.4)
---jitter_c             (default 0.4)
---jitter_s             (default 0.4)
---lighting             (default 0.1)
+--save_path                 (default '')        Path where to save the models
+--backbone                  (default '')        t7-file of backbone network
+--epochs                    (default 45)        Number of epochs to run training algorithm
+--save_epoch                (default 15)        Save model after this many epochs
+--hflip                     (default true)      Horizontal flipping of input images with probability 0.
+--seed                      (default 1)         Random seed
+--batch_size                (default 16)        Batch size for training algorithm
+--learning_rate             (default 0.003)     Learning rate for training algorithm
+--learning_rate_decay       (default 0.1)       Learning rate decay for training algorithm
+--learning_rate_decay_step  (default 0.1)       Reduce learning rate after this many epochs
+--weight_decay              (default 0.001)     Weight decay for training algorithm
+--momentum                  (default 0.9)       Momentum for training algorithm
+--name                      (default '')        Name for the model to train
+--rotation_aug_p            (default 1)         Probability of using rotation augmentation
+--rotation_aug_deg          (default 30)        Degree of rotation for augmentation
+--scale_size                (default 448)       Scale for input images
+--crop_size                 (default 448)       Size of image patch to crop from image
+--loc_w                     (default 14)        Width of heat map used for localization
+--loc_h                     (default 14)        Height of heat map used for localization
+--image_path                (default '')        Path to the images
+--dataset_path              (default '')        Path where to find the dataset t7-files
+--dataset_name              (default '')        Base name of the dataset
+--num_threads               (default 4)         Number of threads to use
+--jitter_b                  (default 0.4)       Brightness for color jitter augmentation
+--jitter_c                  (default 0.4)       Contrast for color jitter augmentation
+--jitter_s                  (default 0.4)       Saturation for color jitter augmentation
+--lighting                  (default 0.1)       Lighting augmentation
 ]]
 
 print('Options: ', opt)
@@ -68,24 +67,10 @@ local model = {}
 local criterion = {}
 local optim_state = nil
 
-model.network = torch.load(opt.backbone)
-model.network = model.network:cuda()
+model.network, model.loc = setupModel.loc(opt)
 model.network:apply(function(m) if m.setMode then m:setMode(1,1,1) end end)
 criterion.smoothl1 = nn.SmoothL1Criterion()
 criterion.smoothl1 = criterion.smoothl1:cuda()
-
---define localization modile, e.g. for ResNet-50:
-model.loc = nn.Sequential()
-model.loc:add(nn.SpatialUpSamplingBilinear({oheight=64, owidth=64}))
-model.loc:add(model.network.modules[1]:clone())
-model.loc:add(model.network.modules[2]:clone())
-model.loc:add(model.network.modules[3]:clone())
-model.loc:add(model.network.modules[4]:clone())
-model.loc:add(model.network.modules[5]:clone())
-model.loc:add(nn.SpatialConvolution(256, 1, 3, 3, 1, 1, 0, 0))
-model.loc:add(nn.View(-1):setNumInputDims(3))
-model.loc = model.loc:cuda()
-model.loc:get(2).gradInput = torch.CudaTensor(4,3,64,64)
 
 -- initiaization
 optim_state = {
@@ -117,7 +102,7 @@ while (opt.epochs == -1 or opt.epochs >= epoch) do
     end
 
     --update the learning rate
-    if (epoch % opt.epoch_step == 0) then
+    if (epoch % opt.learning_rate_decay_step == 0) then
         optim_state.learningRate = optim_state.learningRate * opt.learning_rate_decay
     end 
     epoch = epoch + 1

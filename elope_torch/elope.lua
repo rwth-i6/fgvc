@@ -1,6 +1,6 @@
 require 'nn'
-require 'cudnn'
 require 'cunn'
+require 'cudnn'
 torch.setdefaulttensortype('torch.FloatTensor')
 
 require 'IntraClassLoss'
@@ -10,61 +10,66 @@ require 'training'
 local lapp = require 'pl.lapp'
 local utils = require 'utils'
 local checkpoint = require 'external/checkpoints'
-local modelInit = require 'external/init'
+local setupModel = require 'setupModel'
 local opt = lapp [[
---save_path             (default '') 
---epochs                (default 90)
---save_epoch            (default 30)
---num_classes           (default 200)
---lambda                (default 2.0)
---num_samples           (default 256)
---margin                (default 0.75)
---alpha                 (default 0.5)
---gamma                 (default 16.0)
---seed                  (default 1)
---batch_size            (default 14)
---epoch_step            (default 30)
---learning_rate_decay   (default 0.1)
---learning_rate         (default 0.003)
---weight_decay          (default 0.001)
---momentum              (default 0.9)
---name                  (default '')
---backbone              (default '')
---centers               (default '')
---finetune              (default '')
---softmax               (default 1)
---intra                 (default 1)
---inter                 (default 1)
---tau                   (default 0.3)
---scale_size            (default 448)
---crop_size             (default 448)
---lastLayerSize         (default 512)
---F                     (default 512)
---K                     (default 4)
---image_path            (default '')
---dataset_path          (default '')
---dataset_name          (default '')
---num_threads           (default 4)
---mode                  (default 'train')
---hflip                 (default true)
---rotation_aug_p        (default 1)
---rotation_aug_deg      (default 20)
---jitter_b              (default 0.4)
---jitter_c              (default 0.4)
---jitter_s              (default 0.4)
---lighting              (default 0.1)
---localization_module   (default '')
+--save_path                 (default '')        Path where to save the models
+--epochs                    (default 90)        Number of epochs to run training algorithm
+--save_epoch                (default 30)        Save model after this many epochs (additionally to best validation model)
+--num_classes               (default 200)       Number of classes in dataset
+--lambda                    (default 2.0)       Weight for intra-class loss
+--num_samples               (default 256)       Number of samples used in inter-class loss
+--margin                    (default 0.75)      Margin for inter-class loss
+--alpha                     (default 0.5)       Learning rate for centers
+--gamma                     (default 16.0)      Weight for inter-class loss
+--seed                      (default 1)         Random seed
+--batch_size                (default 14)        Batch size for training algorithm
+--learning_rate             (default 0.003)     Learning rate for training algorithm
+--learning_rate_decay       (default 0.1)       Learning rate decay for training algorithm
+--learning_rate_decay_step  (default 30)        Reduce learning rate after this many epochs
+--weight_decay              (default 0.001)     Weight decay for training algorithm
+--momentum                  (default 0.9)       Momentum for training algorithm
+--name                      (default '')        Name for the model to train
+--backbone                  (default '')        t7-file of backbone network
+--backboneF                 (default 2048)      Feature dimension of backbone network before classification layer
+--centers                   (default '')        Read in centers
+--finetune                  (default '')        Finetune from this model
+--localization_module       (default '')        t7-file containing the localiztion module
+--softmax                   (default 1)         Indicator to use softmax-loss
+--intra                     (default 1)         Indicator to use intra-class loss
+--inter                     (default 1)         Indicater to use inter-class loss
+--tau                       (default 0.3)       Threshold for localization module
+--scale_size                (default 448)       Scale for input images
+--crop_size                 (default 448)       Size of image patch to crop from image
+--lastLayerSize             (default 512)       Size of the last fc-layer (-1 => no fc-layer is inserted)
+--F                         (default 512)       Feature dimension for the embedding
+--K                         (default 4)         K in K-max pooling
+--image_path                (default '')        Path to the images
+--dataset_path              (default '')        Path where to find the dataset t7-files
+--dataset_name              (default '')        Base name of the dataset
+--num_threads               (default 4)         Number of threads to use
+--mode                      (default 'train')   Mode can be either test or train
+--rotation_aug_p            (default 1)         Probability of using rotation augmentation
+--rotation_aug_deg          (default 20)        Degree of rotation for augmentation
+--jitter_b                  (default 0.4)       Brightness for color jitter augmentation
+--jitter_c                  (default 0.4)       Contrast for color jitter augmentation
+--jitter_s                  (default 0.4)       Saturation for color jitter augmentation
+--lighting                  (default 0.1)       Lighting augmentation
+--hflip                     (default true)      Horizontal flipping of input images with probability 0.5
 ]]
 
 print('Options: ', opt)
+
+-- set random seed
 if opt.seed > 0 then
     print('Using random seed ' .. opt.seed)
     torch.manualSeed(opt.seed)
     cutorch.manualSeed(opt.seed)
     math.randomseed(opt.seed)
 end
+
 torch.setnumthreads(opt.num_threads)
 
+-- load datasets
 local train_dataset, test_dataset, val_dataset
 train_dataset = torch.load(path.join(opt.dataset_path, opt.dataset_name .. '_train.t7'))
 train_dataset.image_path = opt.image_path
@@ -78,63 +83,23 @@ if utils.is_file(path.join(opt.dataset_path, opt.dataset_name .. '_val.t7')) the
     val_dataset.name = 'val'
 end
 
+-- setup model and critetion
 local model = {}
 local criterion = {}
 local optim_state = nil
 
-
-local centers = torch.randn(opt.num_classes, opt.F) 
-if not(opt.centers == '') then
-    centers = torch.load(opt.centers)
-end
-model.centers = centers
+model.centers = setupModel.centers(opt)
+model.normnn = setupModel.normnn(opt)
 
 if not(opt.finetune == '') then
     print('Finetuning from: ' .. opt.finetune)
-    model.network = torch.load(opt.finetune)
-    local finetune_fc = string.gsub(opt.finetune, 'network', 'fc')
-    model.fc = torch.load(finetune_fc)
+    model.network, model.fc = setupModel.finetune(opt)
 else
     print('Building new model from backbone')
-    --backbone, e.g. resnet
-    local backbone  = torch.load(opt.backbone)
-    --feature dimension of last conv layer
-    local nFeatures = 2048
-    --remove classification layer and global average pooling
-    backbone:remove(#backbone)
-    backbone:remove(#backbone)
-    backbone:remove(#backbone)
-    --add global k-max pooling
-    backbone:add(nn.KMaxPooling(opt.K))
-    backbone:add(nn.View(nFeatures):setNumInputDims(3))
-    --add embedding layer if defined
-    local lastLayerSize = opt.lastLayerSize
-    if lastLayerSize > -1 then
-       backbone:add(nn.Linear(nFeatures, lastLayerSize))
-       backbone:add(nn.BatchNormalization(lastLayerSize))
-       backbone:add(nn.PReLU())
-    else
-       lastLayerSize = nFeatures
-    end
-
-    --create new fully connected classification layer
-    backbone:add(nn.Linear(lastLayerSize, opt.num_classes))
-    backbone = backbone:cuda()
-
-    --optimize memory
-    opt.tensorType = 'torch.CudaTensor'
-    modelInit.shareGradInput(backbone,opt)
-    backbone.gradInput = nil
-
-    model.fc = backbone:get(#backbone)
-    backbone:remove(#backbone)
-    model.network = backbone
+    model.network, model.fc = setupModel.resnetFb(opt)
 end
 
-model.normnn = nn.Sequential()
-model.normnn:add(nn.Normalize(2))
-model.centers = model.centers:cdiv(model.centers:norm(2,2):expandAs(model.centers))
-
+-- load localization module if defined
 if opt.localization_module ~= '' then
     model.localization_module = torch.load(opt.localization_module)
     model.localization_module:cuda()
@@ -159,15 +124,12 @@ if (opt.inter == 1) then
     criterion.inter_loss = criterion.inter_loss:cuda()
 end
 
-model.network = model.network:cuda()
-model.fc = model.fc:cuda()
-model.normnn:cuda()
 model.network:apply(function(m) if m.setMode then m:setMode(1,1,1) end end)
 model.full_network = nn.Sequential()
 model.full_network:add(model.network)
 model.full_network:add(model.fc)
 
--- initiaization
+-- initiaization of training algorithm
 optim_state = {
    learningRate = opt.learning_rate,
    momentum = opt.momentum,
@@ -181,20 +143,9 @@ model.params, model.gradParams = model.full_network:getParameters()
 print('Network has', model.params:numel(), 'parameters')
 print('Network has', #model.network:findModules'cudnn.SpatialConvolution', 'convolutions')
 
-modelFilePrefix = opt.name  
-modelFilePrefix = modelFilePrefix .. '_s'..  opt.seed
-modelFilePrefix = modelFilePrefix .. '_is' .. opt.scale_size
-modelFilePrefix = modelFilePrefix .. '_lls' .. opt.lastLayerSize
-modelFilePrefix = modelFilePrefix .. '_lr' .. opt.learning_rate
-modelFilePrefix = modelFilePrefix .. '_bs' .. opt.batch_size
-modelFilePrefix = modelFilePrefix .. '_es' .. opt.epoch_step
-modelFilePrefix = modelFilePrefix .. '_aug' .. opt.rotation_aug_p .. '-' .. opt.rotation_aug_deg .. '-' .. opt.jitter_b .. '-' .. opt.jitter_c .. '-' .. opt.jitter_s .. '-' .. opt.lighting
-modelFilePrefix = modelFilePrefix .. '_g' .. opt.gamma
-modelFilePrefix = modelFilePrefix .. '_l' .. opt.lambda
-modelFilePrefix = modelFilePrefix .. '_a' .. opt.alpha
-modelFilePrefix = modelFilePrefix .. '_m' .. opt.margin
+local modelFilePrefix = setupModel.modelFilePrefix(opt)
 
-
+-- test only
 if opt.mode == 'test' then
     if (val_dataset ~= nil) then
         local val_mean_loss, val_accuracy = testing(val_dataset, model, criterion, opt)
@@ -210,14 +161,17 @@ if opt.mode == 'test' then
 end
 
 
+-- train
 local epoch = 1
 local best_val_accuracy = 0
 while (opt.epochs == -1 or opt.epochs >= epoch) and (opt.mode == 'train') do
+    -- train for one epoch
     print('TRAIN: Epoch ' .. epoch)
     mean_loss, total_time, model, optim_state = training(train_dataset, opt, model, criterion, optim_state, epoch)
     print('TRAIN: Total time = ' .. total_time .. ' hours')
     print('TRAIN:  Mean loss = ' .. mean_loss)
    
+    -- test
     local val_mean_loss = 0
     local val_accuracy = 0
     local test_mean_loss = 0 
@@ -246,7 +200,7 @@ while (opt.epochs == -1 or opt.epochs >= epoch) and (opt.mode == 'train') do
 
 
     --update the learning rate
-    if (epoch % opt.epoch_step == 0) then
+    if (epoch % opt.learning_rate_decay_step == 0) then
         optim_state.learningRate = optim_state.learningRate * opt.learning_rate_decay
     end 
     epoch = epoch + 1
