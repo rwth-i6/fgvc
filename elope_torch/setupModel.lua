@@ -13,10 +13,45 @@ function setupModel.centers(opt)
     return centers
 end
 
+function setupModel.getKMaxWeight(opt)
+    local KMaxWeight = nn.Sequential()
+    KMaxWeight:add(nn.View(1,opt.backboneF*opt.K,1):setNumInputDims(2))
+    local conv = nn.SpatialConvolution(1,1,1,opt.K,1,opt.K,0,0)
+    conv.bias = nil
+    conv.weight:fill(1/opt.K)
+    KMaxWeight:add(conv)
+    KMaxWeight:add(nn.View(-1):setNumInputDims(3))
+
+    return KMaxWeight
+end
+
+
 function setupModel.finetune(opt)
     local network = torch.load(opt.finetune)
     local finetune_fc = string.gsub(opt.finetune, 'network', 'fc')
     local fc = torch.load(finetune_fc)
+
+    -- if weights for KMaxPooling are enabled, check if model to 
+    -- finetune has such weights, otherwise insert them 
+    for n,m in pairs(network.modules) do
+        if torch.typename(m) == 'nn.KMaxPooling' then
+            -- for compatibility with older implemention of nn.KMaxPooling
+            if m.global ==  nil then
+                m.global = true
+            end
+            if opt.KMaxWeight then
+                if m.global then
+                    network:remove(n)
+                    local KMaxWeight = setupModel.getKMaxWeight(opt)
+                    network:insert(nn.KMaxPooling(opt.K, false), n)
+                    network:insert(KMaxWeight, n+1)
+   
+                    -- remove old view
+                    network:remove(n+2) 
+                end
+            end
+        end
+    end
 
     network = network:cuda()
     fc = fc:cuda()
@@ -38,8 +73,15 @@ function setupModel.resnetFb(opt)
     backbone:remove(#backbone)
     backbone:remove(#backbone)
     backbone:remove(#backbone)
-    backbone:add(nn.KMaxPooling(opt.K))
-    backbone:add(nn.View(backboneF):setNumInputDims(3))
+    -- add global (weighted) k-max pooling
+    if opt.KMaxWeight then
+        local KMaxWeight = setupModel.getKMaxWeight(opt)
+        backbone:add(nn.KMaxPooling(opt.K, false))
+        backbone:add(KMaxWeight)
+    else
+        backbone:add(nn.KMaxPooling(opt.K, true))
+        backbone:add(nn.View(backboneF):setNumInputDims(3))
+    end
     -- add embedding layer if defined
     local lastLayerSize = opt.lastLayerSize
     if lastLayerSize > -1 then

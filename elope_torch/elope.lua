@@ -55,6 +55,7 @@ local opt = lapp [[
 --jitter_s                  (default 0.4)       Saturation for color jitter augmentation
 --lighting                  (default 0.1)       Lighting augmentation
 --hflip                     (default true)      Horizontal flipping of input images with probability 0.5
+--KMaxWeight                                    Use weights for K-Max pooling
 ]]
 
 print('Options: ', opt)
@@ -98,7 +99,7 @@ else
     print('Building new model from backbone')
     model.network, model.fc = setupModel.resnetFb(opt)
 end
-
+print(model.network)
 -- load localization module if defined
 if opt.localization_module ~= '' then
     model.localization_module = torch.load(opt.localization_module)

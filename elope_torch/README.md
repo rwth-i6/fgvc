@@ -34,7 +34,7 @@ train_images.txt
 test_images.txt
 val_images.txt (optional)
 ```
-Each line in such a file represents one image. It first contains the class represented as integer and then the image path (can be a relative path).
+Each line in such a file represents one image. It first contains the class represented as integer (starting at 1) and then the image path (can be a relative path).
 
 For the validation set there are three options:
 1. No validation set:
@@ -61,7 +61,7 @@ The resulting model is saved in the path *path_to_checkpoints* with the prefix g
 - network: Contains the model except for the final classification layer
 - centers: Contains the learned class centers
 - meta: Contains meta information about the training procedure
-- fc: Contains the final classificationlayer
+- fc: Contains the final classificationi layer
 ```
 
 ### Training of the localization module
@@ -78,5 +78,12 @@ With the localization module trained (assuming the checkpoint is called *loc_mod
 th elope.lua --backbone *path_to_backbone*/backbone.t7 --image_path *path_to_images*/ --save_path *path_to_checkpoints*/ --name model --dataset_path *path_to_dataset*/ --dataset_name name --localization_module *path_to_checkpoints*/loc_module_network.t7
 ```
 
+### Finetuning with global weighted K-Max pooling
+Use *--KMaxWeight* flag to add weights the K-Max pooling (can also be used when training from scratch).
+```
+th elope.lua --finetune *path_to_checkpoints*/model_network.t7 --centers *path_to_checkpoints*/model_centers.t7 --localization_module *path_to_checkpoints*/localization_module.t7 --learning_rate 0.001 --learning_rate_decay_step 20 --epochs 40 --KMaxWeight
+```
+
 ### Notes
-We are using the pre-processing and the basic checkpoint writing and reading functions from [fb.resnet.torch](https://github.com/facebookarchive/fb.resnet.torch).
+We are using the pre-processing, the basic checkpoint writing and reading functions and the shareGradInput function from [fb.resnet.torch](https://github.com/facebookarchive/fb.resnet.torch).
+
