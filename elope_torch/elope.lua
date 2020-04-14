@@ -99,7 +99,7 @@ else
     print('Building new model from backbone')
     model.network, model.fc = setupModel.resnetFb(opt)
 end
-print(model.network)
+
 -- load localization module if defined
 if opt.localization_module ~= '' then
     model.localization_module = torch.load(opt.localization_module)
